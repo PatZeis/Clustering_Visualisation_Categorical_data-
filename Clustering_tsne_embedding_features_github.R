@@ -33,6 +33,100 @@ setMethod("initialize",
             return(.Object)
           }
 )
+
+## required functions for clustering and dimensional reduction
+
+clusGapExt <- function (x, FUNcluster, K.max, B = 100, verbose = TRUE, method="euclidean",random=TRUE,diss=FALSE,
+                       ...) 
+{
+  stopifnot(is.function(FUNcluster), length(dim(x)) == 2, K.max >= 
+              2, (n <- nrow(x)) >= 1, (p <- ncol(x)) >= 1)
+  if (B != (B. <- as.integer(B)) || (B <- B.) <= 0) 
+    stop("'B' has to be a positive integer")
+  if (is.data.frame(x)) 
+    x <- as.matrix(x)
+  ii <- seq_len(n)
+  W.k <- function(X, kk) {
+    clus <- if (kk > 1) 
+      FUNcluster(X, kk, ...)$cluster
+    else rep.int(1L, nrow(X))
+    0.5 * sum(vapply(split(ii, clus), function(I) {
+      if ( diss ){
+        xs <- X[I,I, drop = FALSE]
+        sum(xs/nrow(xs))
+      }else{
+        xs <- X[I, , drop = FALSE]
+        d <- dist.gen(xs,method=method)
+        sum(d/nrow(xs))
+      }
+    }, 0))
+  }
+  logW <- E.logW <- SE.sim <- numeric(K.max)
+  if (verbose) 
+    cat("Clustering k = 1,2,..., K.max (= ", K.max, "): .. \n", 
+        sep = "")
+  for (k in 1:K.max){
+    if (verbose) cat("k =",k,"\r")
+    logW[k] <- log(W.k(x, k))
+  }
+  if (verbose){ 
+    cat("\n")
+    cat("done.\n")
+  }
+  if (random){
+    xs <- scale(x, center = TRUE, scale = FALSE)
+    m.x <- rep(attr(xs, "scaled:center"), each = n)
+    V.sx <- svd(xs)$v
+    rng.x1 <- apply(xs %*% V.sx, 2, range)
+    logWks <- matrix(0, B, K.max)
+    
+    if (verbose) 
+      cat("Bootstrapping, b = 1,2,..., B (= ", B, ")  [one \".\" per sample]:\n", 
+          sep = "")
+    for (b in 1:B) {
+      z1 <- apply(rng.x1, 2, function(M, nn) runif(nn, min = M[1], 
+                                                   max = M[2]), nn = n)
+      z <- tcrossprod(z1, V.sx) + m.x
+      ##z <- apply(x,2,function(m) runif(length(m),min=min(m),max=max(m)))
+      ##z <- apply(x,2,function(m) sample(m))
+      for (k in 1:K.max) {
+        logWks[b, k] <- log(W.k(z, k))
+      }
+      if (verbose) 
+        cat(".", if (b%%50 == 0) 
+          paste(b, "\n"))
+    }
+    if (verbose && (B%%50 != 0)) 
+      cat("", B, "\n")
+    E.logW <- colMeans(logWks)
+    SE.sim <- sqrt((1 + 1/B) * apply(logWks, 2, var))
+  }else{
+    E.logW <- rep(NA,K.max)
+    SE.sim <- rep(NA,K.max)
+  }
+  structure(class = "clusGap", list(Tab = cbind(logW, E.logW, 
+                                                gap = E.logW - logW, SE.sim), n = n, B = B, FUNcluster = FUNcluster))
+}
+  
+
+pamkdCBI <- function (data, krange = 2:10, k = NULL, criterion = "asw", usepam = TRUE, 
+                      scaling = TRUE, diss = inherits(data, "dist"), ...) 
+{
+  if (!is.null(k)) 
+    krange <- k
+  c1 <- pamk(as.dist(data), krange = krange, criterion = criterion, 
+             usepam = usepam, scaling = scaling, diss = diss, ...)
+  partition <- c1$pamobject$clustering
+  cl <- list()
+  nc <- c1$nc
+  
+  for (i in 1:nc) cl[[i]] <- partition == i
+  out <- list(result = c1, nc = nc, clusterlist = cl, partition = partition, 
+              clustermethod = "pam/estimated k", criterion = criterion)
+  out
+}
+
+
 ## clustering and dimensional reduction 
 cluster_survey <- function(object, cln = NULL, tsne_perplexity=30, umap.pars = umap.defaults) {
   dismat <- daisy(object@surveydata, metric = "gower", type = list("ordratio"=ints))
